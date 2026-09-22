@@ -4,7 +4,9 @@
   "private": true,
   "description": "Forge-native authentication flow test application",
   "type": "module",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
@@ -14,6 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sendgrid/client": "8.1.6",
+    "@sendgrid/mail": "8.1.6",
     "connect-pg-simple": "10.0.0",
     "express": "5.1.0",
     "express-rate-limit": "8.7.0",
