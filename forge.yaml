@@ -19,10 +19,17 @@ dependencies:
     type: postgresql
     required: true
     environment_variable: DATABASE_URL
+  sendgrid:
+    type: external_http_api
+    required: true
+    environment_variables:
+      - SENDGRID_API_KEY
+      - SENDGRID_API_BASE_URL
+      - TRANSACTIONAL_EMAIL_FROM
+      - TRANSACTIONAL_EMAIL_FROM_NAME
 organization_profile:
   status: absent
   path: .forge/organization-profile.md
   applicable_rules: []
   approved_service_bindings: []
-  unresolved_decisions:
-    - production_email_delivery_service
+  unresolved_decisions: []
