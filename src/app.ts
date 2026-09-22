@@ -6,13 +6,14 @@ import connectPgSimple from "connect-pg-simple";
 import helmet from "helmet";
 import type pg from "pg";
 import { escapeHtml, hashPassword, isAllowedEmailDomain, normalizeEmail, validateEmail, validatePassword, verifyPassword } from "./auth.js";
+import type { TransactionalEmailSender } from "./email.js";
 import { authForm, csrfField, layout } from "./pages.js";
 
 declare module "express-session" {
-  interface SessionData { userId?: string; email?: string; emailVerified?: boolean; csrfToken?: string; flash?: string; verificationTestUrl?: string }
+  interface SessionData { userId?: string; email?: string; emailVerified?: boolean; csrfToken?: string; flash?: string }
 }
 
-type AppConfig = { pool: pg.Pool; sessionSecret: string; nodeEnv: string; baseUrl: string; resetDelivery: "screen" | "log"; allowedEmailDomain: string; emailVerificationDelivery: "screen" };
+type AppConfig = { pool: pg.Pool; sessionSecret: string; nodeEnv: string; baseUrl: string; allowedEmailDomain: string; emailSender: TransactionalEmailSender };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 export function createApp(config: AppConfig): express.Express {
@@ -65,9 +66,6 @@ export function createApp(config: AppConfig): express.Express {
     await config.pool.query("INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '15 minutes')", [sha256(token), userId]);
     return `${config.baseUrl}/verify-email/confirm?token=${token}`;
   };
-  const setTestVerificationLink = (req: Request, url: string): void => {
-    if (config.emailVerificationDelivery === "screen") req.session.verificationTestUrl = url;
-  };
 
   app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
   app.get("/readyz", async (_req, res) => { try { await config.pool.query("SELECT 1"); res.json({ status: "ready" }); } catch { res.status(503).json({ status: "not_ready" }); } });
@@ -87,7 +85,7 @@ export function createApp(config: AppConfig): express.Express {
     if (!isAllowedEmailDomain(email, config.allowedEmailDomain) || !user || !(await verifyPassword(password, user.password_hash))) { res.status(401).send(authForm({ title: "Sign in", action: "/login", csrf: csrf(req), submit: "Sign in", error: "Email or password is incorrect.", links: `<p class="links"><a href="/forgot-password">Forgot password?</a><a href="/signup">Create account</a></p>` })); return; }
     const verified = Boolean(user.email_verified_at);
     await regenerateAndLogin(req, user.id, user.email, verified);
-    if (!verified) { const verificationUrl = await issueVerificationLink(user.id); setTestVerificationLink(req, verificationUrl); res.redirect("/verify-email"); return; }
+    if (!verified) { const verificationUrl = await issueVerificationLink(user.id); await config.emailSender.sendVerification(user.email, verificationUrl); res.redirect("/verify-email"); return; }
     res.redirect("/success");
   } catch (error) { next(error); } });
 
@@ -99,17 +97,17 @@ export function createApp(config: AppConfig): express.Express {
     const id = randomUUID(); const passwordHash = await hashPassword(password);
     try { await config.pool.query("INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)", [id, email, passwordHash]); }
     catch (error: unknown) { if ((error as { code?: string }).code === "23505") { res.status(409).send(authForm({ title: "Create account", action: "/signup", csrf: csrf(req), submit: "Create account", confirm: true, error: "An account with that email already exists." })); return; } throw error; }
-    await regenerateAndLogin(req, id, email, false); const verificationUrl = await issueVerificationLink(id); setTestVerificationLink(req, verificationUrl); res.redirect("/verify-email");
+    await regenerateAndLogin(req, id, email, false); const verificationUrl = await issueVerificationLink(id); await config.emailSender.sendVerification(email, verificationUrl); res.redirect("/verify-email");
   } catch (error) { next(error); } });
 
   app.get("/verify-email", requireAuth, (req, res) => {
     if (req.session.emailVerified) { res.redirect("/success"); return; }
     const notice = req.session.flash; delete req.session.flash;
-    res.send(verificationPendingPage(csrf(req), req.session.email ?? "", req.session.verificationTestUrl, notice));
+    res.send(verificationPendingPage(csrf(req), req.session.email ?? "", notice));
   });
   app.post("/verify-email/resend", requireAuth, authLimiter, verifyCsrf, async (req, res, next) => { try {
     if (req.session.emailVerified) { res.redirect("/success"); return; }
-    const verificationUrl = await issueVerificationLink(req.session.userId!); setTestVerificationLink(req, verificationUrl); req.session.flash = "A new verification link was created."; res.redirect("/verify-email");
+    const verificationUrl = await issueVerificationLink(req.session.userId!); await config.emailSender.sendVerification(req.session.email!, verificationUrl); req.session.flash = "A new verification email was sent."; res.redirect("/verify-email");
   } catch (error) { next(error); } });
   app.get("/verify-email/confirm", (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
@@ -144,9 +142,8 @@ export function createApp(config: AppConfig): express.Express {
   app.get("/forgot-password", (req, res) => res.send(layout({ title: "Forgot password", body: `<section class="card"><h1>Reset your password</h1><p>Enter your account email. We’ll create a time-limited reset link.</p><form method="post" action="/forgot-password">${csrfField(csrf(req))}<label>Email<input name="email" type="email" autocomplete="email" required></label><button type="submit">Continue</button></form></section>` })));
   app.post("/forgot-password", authLimiter, verifyCsrf, async (req, res, next) => { try {
     const email = normalizeEmail(req.body.email); const user = (await config.pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email])).rows[0]; let resetUrl: string | undefined;
-    if (user) { const token = randomBytes(32).toString("base64url"); await config.pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at < NOW()", [user.id]); await config.pool.query("INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')", [sha256(token), user.id]); resetUrl = `${config.baseUrl}/reset-password?token=${token}`; if (config.resetDelivery === "log") console.log(JSON.stringify({ level: "info", event: "password_reset_requested", reset_url: resetUrl })); }
-    const testLink = config.resetDelivery === "screen" && resetUrl ? `<p class="test-link"><strong>Test mode:</strong> <a href="${escapeHtml(resetUrl)}">open password reset link</a></p>` : "";
-    res.send(layout({ title: "Check your reset instructions", body: `<section class="card"><h1>Check your reset instructions</h1><p>If an account exists for that email, a reset link has been created.</p>${testLink}<a class="button secondary" href="/login">Return to sign in</a></section>` }));
+    if (user) { const token = randomBytes(32).toString("base64url"); await config.pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at < NOW()", [user.id]); await config.pool.query("INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')", [sha256(token), user.id]); resetUrl = `${config.baseUrl}/reset-password?token=${token}`; await config.emailSender.sendPasswordReset(email, resetUrl); }
+    res.send(layout({ title: "Check your reset instructions", body: `<section class="card"><h1>Check your reset instructions</h1><p>If an account exists for that email, a reset link has been sent.</p><a class="button secondary" href="/login">Return to sign in</a></section>` }));
   } catch (error) { next(error); } });
   app.get("/reset-password", (req, res) => { const token = typeof req.query.token === "string" ? req.query.token : ""; res.send(resetPasswordPage(csrf(req), token)); });
   app.post("/reset-password", authLimiter, verifyCsrf, async (req, res, next) => {
@@ -173,7 +170,6 @@ function resetPasswordPage(csrf: string, token: string, error?: string): string 
   return layout({ title: "Choose a new password", error, body: `<section class="card"><h1>Choose a new password</h1><form method="post" action="/reset-password">${csrfField(csrf)}<input type="hidden" name="token" value="${escapeHtml(token)}"><label>New password<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label><button type="submit">Reset password</button></form></section>` });
 }
 
-function verificationPendingPage(csrf: string, email: string, testUrl?: string, notice?: string): string {
-  const testLink = testUrl ? `<p class="test-link"><strong>Local test mode:</strong> <a href="${escapeHtml(testUrl)}">open email verification link</a></p>` : "";
-  return layout({ title: "Verify your email", notice, body: `<section class="card"><span class="eyebrow">EMAIL CHECK</span><h1>Verify your email</h1><p>We created a 15-minute verification link for <strong>${escapeHtml(email)}</strong>. You must verify this address before entering the app.</p>${testLink}<form method="post" action="/verify-email/resend">${csrfField(csrf)}<button type="submit">Create a new link</button></form><form method="post" action="/logout">${csrfField(csrf)}<button class="button secondary" type="submit">Sign out</button></form></section>` });
+function verificationPendingPage(csrf: string, email: string, notice?: string): string {
+  return layout({ title: "Verify your email", notice, body: `<section class="card"><span class="eyebrow">EMAIL CHECK</span><h1>Verify your email</h1><p>We sent a 15-minute verification link to <strong>${escapeHtml(email)}</strong>. You must verify this address before entering the app.</p><form method="post" action="/verify-email/resend">${csrfField(csrf)}<button type="submit">Send a new link</button></form><form method="post" action="/logout">${csrfField(csrf)}<button class="button secondary" type="submit">Sign out</button></form></section>` });
 }
