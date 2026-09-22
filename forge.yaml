@@ -24,4 +24,5 @@ organization_profile:
   path: .forge/organization-profile.md
   applicable_rules: []
   approved_service_bindings: []
-  unresolved_decisions: []
+  unresolved_decisions:
+    - production_email_delivery_service
