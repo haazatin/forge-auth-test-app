@@ -4,11 +4,13 @@ A small Forge-native authentication application for testing account flows. It re
 
 ## Run locally
 
-1. Copy `.env.example` to `.env` if you want to override Compose defaults.
+1. Copy `.env.example` to `.env` and set the SendGrid API key, API base URL, and verified sender identity.
 2. Run `docker compose up --build`.
 3. Open <http://localhost:8080>.
 
-The default allowed domain is `shapira.xyz`. In local test mode, verification and password-reset links are shown on screen. This is intentional for testing and does not prove inbox ownership; configure an organization-approved transactional email provider before production use.
+The default allowed domain is `shapira.xyz`. Verification and password-reset links are delivered through the SendGrid API; there is no screen or log delivery fallback.
+
+For the internal platform, inject `BASE_URL`, `DATABASE_URL`, `SESSION_SECRET`, `SENDGRID_API_KEY`, `SENDGRID_API_BASE_URL`, `TRANSACTIONAL_EMAIL_FROM`, and optionally `TRANSACTIONAL_EMAIL_FROM_NAME`. Build with `npm run build` and start the HTTP service with the single command `npm start`; it listens on `PORT` (8080 by default).
 
 ## Commands
 
