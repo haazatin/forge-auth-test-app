@@ -1,0 +1,33 @@
+{
+  "name": "forge-auth-test-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Forge-native authentication flow test application",
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "dev": "tsx watch src/server.ts",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test:e2e": "node scripts/smoke.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "connect-pg-simple": "10.0.0",
+    "express": "5.1.0",
+    "express-rate-limit": "8.7.0",
+    "express-session": "1.18.2",
+    "helmet": "8.1.0",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@types/connect-pg-simple": "7.0.3",
+    "@types/express": "5.0.3",
+    "@types/express-session": "1.18.2",
+    "@types/node": "22.18.6",
+    "@types/pg": "8.15.5",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}
