@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    environment:
+      PORT: "8080"
+      NODE_ENV: development
+      BASE_URL: http://localhost:${APP_PORT:-8080}
+      DATABASE_URL: postgresql://auth_app:auth_app_local@postgres:5432/auth_app
+      SESSION_SECRET: ${SESSION_SECRET:-local-only-change-this-32-character-secret}
+      PASSWORD_RESET_DELIVERY: ${PASSWORD_RESET_DELIVERY:-screen}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+  postgres:
+    image: postgres:16.10-bookworm
+    environment:
+      POSTGRES_DB: auth_app
+      POSTGRES_USER: auth_app
+      POSTGRES_PASSWORD: auth_app_local
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth_app -d auth_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+volumes:
+  postgres_data:
