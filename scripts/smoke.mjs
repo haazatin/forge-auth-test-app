@@ -1,7 +1,35 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 
 const baseUrl = process.env.TEST_BASE_URL ?? "http://127.0.0.1:8080";
+const emailApiPort = Number(process.env.TEST_EMAIL_API_PORT ?? "19090");
 let cookie = "";
+const deliveredMessages = [];
+
+const emailApi = createServer((request, response) => {
+  let body = "";
+  request.setEncoding("utf8");
+  request.on("data", (chunk) => { body += chunk; });
+  request.on("end", () => {
+    if (request.method !== "POST" || request.url !== "/v3/mail/send") { response.writeHead(404).end(); return; }
+    deliveredMessages.push(JSON.parse(body));
+    response.writeHead(202).end();
+  });
+});
+await new Promise((resolve, reject) => { emailApi.once("error", reject); emailApi.listen(emailApiPort, "0.0.0.0", resolve); });
+
+async function deliveredLink(path) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    for (const message of deliveredMessages) {
+      const content = (message.content ?? []).map((item) => item.value).join("\n");
+      const match = content.match(new RegExp(`https?://[^\\s<\"]+${path.replaceAll("/", "\\/")}[^\\s<\"]*`));
+      if (match) { deliveredMessages.splice(deliveredMessages.indexOf(message), 1); return match[0]; }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`No transactional email containing ${path} was delivered`);
+}
 
 async function request(path, options = {}) {
   const headers = new Headers(options.headers);
@@ -48,9 +76,8 @@ assert.equal(response.status, 302);
 assert.equal(response.headers.get("location"), "/verify-email");
 
 html = await page("/verify-email");
-const verificationMatch = html.match(/href="([^"]+\/verify-email\/confirm\?token=[^"]+)"/);
-assert.ok(verificationMatch, "test verification URL is shown");
-const verificationUrl = verificationMatch[1];
+assert.match(html, /We sent a 15-minute verification link/);
+const verificationUrl = await deliveredLink("/verify-email/confirm");
 const verificationToken = new URL(verificationUrl).searchParams.get("token");
 html = await page(verificationUrl);
 response = await submit("/verify-email/confirm", { _csrf: csrf(html), token: verificationToken });
@@ -77,12 +104,11 @@ assert.equal(response.status, 302);
 html = await page("/forgot-password");
 response = await submit("/forgot-password", { _csrf: csrf(html), email });
 assert.equal(response.status, 200);
-html = await response.text();
-const resetMatch = html.match(/href="([^"]+\/reset-password\?token=[^"]+)"/);
-assert.ok(resetMatch, "test reset URL is shown");
+assert.match(await response.text(), /reset link has been sent/);
+const resetUrl = await deliveredLink("/reset-password");
 
-html = await page(resetMatch[1]);
-response = await submit("/reset-password", { _csrf: csrf(html), token: new URL(resetMatch[1]).searchParams.get("token"), password: finalPassword, confirmPassword: finalPassword });
+html = await page(resetUrl);
+response = await submit("/reset-password", { _csrf: csrf(html), token: new URL(resetUrl).searchParams.get("token"), password: finalPassword, confirmPassword: finalPassword });
 assert.equal(response.status, 302);
 
 html = await page("/login");
@@ -90,4 +116,5 @@ response = await submit("/login", { _csrf: csrf(html), email, password: finalPas
 assert.equal(response.status, 302);
 assert.match(await page("/success"), /Success!/);
 
+await new Promise((resolve) => emailApi.close(resolve));
 console.log(JSON.stringify({ status: "ok", flow: "domain-rejection/signup/verify-once/change-password/logout/login/forgot/reset/login" }));
