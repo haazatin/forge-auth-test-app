@@ -1,0 +1,27 @@
+schema_version: 1
+application:
+  name: forge-auth-test-app
+  primary_service: app
+runtime:
+  language: typescript
+  node_version: "22"
+  package_manager: npm
+  port: 8080
+commands:
+  build: npm run build
+  start: npm start
+  test: npm test
+probes:
+  liveness_path: /healthz
+  readiness_path: /readyz
+dependencies:
+  postgres:
+    type: postgresql
+    required: true
+    environment_variable: DATABASE_URL
+organization_profile:
+  status: absent
+  path: .forge/organization-profile.md
+  applicable_rules: []
+  approved_service_bindings: []
+  unresolved_decisions: []
