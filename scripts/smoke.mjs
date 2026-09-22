@@ -32,15 +32,34 @@ async function submit(path, values) {
   });
 }
 
-const email = `smoke-${Date.now()}@example.test`;
+const email = `smoke-${Date.now()}@shapira.xyz`;
 const firstPassword = "first-password-123";
 const secondPassword = "second-password-456";
 const finalPassword = "final-password-789";
 
 let html = await page("/signup");
-let response = await submit("/signup", { _csrf: csrf(html), email, password: firstPassword, confirmPassword: firstPassword });
+let response = await submit("/signup", { _csrf: csrf(html), email: `blocked-${Date.now()}@example.test`, password: firstPassword, confirmPassword: firstPassword });
+assert.equal(response.status, 400);
+assert.match(await response.text(), /Use a shapira\.xyz email address/);
+
+html = await page("/signup");
+response = await submit("/signup", { _csrf: csrf(html), email, password: firstPassword, confirmPassword: firstPassword });
+assert.equal(response.status, 302);
+assert.equal(response.headers.get("location"), "/verify-email");
+
+html = await page("/verify-email");
+const verificationMatch = html.match(/href="([^"]+\/verify-email\/confirm\?token=[^"]+)"/);
+assert.ok(verificationMatch, "test verification URL is shown");
+const verificationUrl = verificationMatch[1];
+const verificationToken = new URL(verificationUrl).searchParams.get("token");
+html = await page(verificationUrl);
+response = await submit("/verify-email/confirm", { _csrf: csrf(html), token: verificationToken });
 assert.equal(response.status, 302);
 assert.equal(response.headers.get("location"), "/success");
+
+html = await page(verificationUrl);
+response = await submit("/verify-email/confirm", { _csrf: csrf(html), token: verificationToken });
+assert.equal(response.status, 400, "verification links are single-use");
 assert.match(await page("/success"), /Success!/);
 
 html = await page("/change-password");
@@ -71,4 +90,4 @@ response = await submit("/login", { _csrf: csrf(html), email, password: finalPas
 assert.equal(response.status, 302);
 assert.match(await page("/success"), /Success!/);
 
-console.log(JSON.stringify({ status: "ok", flow: "signup/change-password/logout/login/forgot/reset/login" }));
+console.log(JSON.stringify({ status: "ok", flow: "domain-rejection/signup/verify-once/change-password/logout/login/forgot/reset/login" }));
