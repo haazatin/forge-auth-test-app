@@ -12,6 +12,11 @@ export function validateEmail(email: string): boolean {
   return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+export function isAllowedEmailDomain(email: string, allowedDomain: string): boolean {
+  const separator = email.lastIndexOf("@");
+  return separator > 0 && email.slice(separator + 1).toLowerCase() === allowedDomain.toLowerCase();
+}
+
 export function validatePassword(password: unknown): string | null {
   if (typeof password !== "string" || password.length < 12) return "Password must be at least 12 characters.";
   if (password.length > 128) return "Password must be no more than 128 characters.";
